@@ -1,0 +1,607 @@
+﻿#include "level_stream.h"
+#include "Runnable.h"
+
+class thread : public FRunnable //순서_5
+{
+public:
+   thread(Ulevel_stream* ts, TArray<FName> arr);
+   ~thread();
+   FRunnableThread* Thread;
+  
+   virtual bool Init();
+   virtual uint32 Run();
+   virtual void Stop();
+   void shutdown();
+
+
+   /** Makes sure this thread has stopped properly */
+   void EnsureCompletion();
+
+   FCriticalSection m_mutex;//크리티컬섹션
+   int32 compare_fin;
+   Ulevel_stream* tss;
+
+   bool IsFinished() const
+   {
+
+      return (is_fin > compare_fin);//세마포어 처럼 카운터를 사용하여 동기화합니다.
+   }
+
+private :
+      int32   is_fin;
+      TArray<FName> stream_arr;
+};
+
+thread::thread(Ulevel_stream* ts,TArray<FName> arr) : is_fin(0) , compare_fin(0) //스레드 기본 설정을 합니다. 순서_6
+{
+
+   tss = ts;
+   stream_arr = arr;
+   Thread = FRunnableThread::Create(this, TEXT("fenpon_s_slave "), 0, TPri_BelowNormal);//스레드 생성
+}
+thread::~thread()
+{
+   delete Thread;
+   Thread = NULL;
+}
+bool thread::Init()
+{
+   return true;
+}
+uint32 thread::Run()//스레드 실행 함수 순서_7
+{//stream_arr //tss
+   
+      
+      FPlatformProcess::Sleep(0.03);
+   
+      Ulevel_stream* stream_obj = tss; //현재 스트리밍 컴포넌트를 받습니다.
+   
+      while (stream_obj->finish_first_stream.Num() > 0)//레벨스트리밍이 로드와 비지블한지 확인하고 모든 리스트가 완료이면 begin_open_fin를 true로 반환 아니면 로드될때까지 루프합니다.
+      {
+         
+         ULevelStreaming* base_stream_chk;
+         FName nm = stream_obj->finish_first_stream[0];
+         
+         if (
+            (
+            (base_stream_chk = UGameplayStatics::GetStreamingLevel(stream_obj, nm)) != NULL
+               )
+            )
+         {
+            if (base_stream_chk->IsLevelLoaded() == true)
+            {
+               if (base_stream_chk->IsLevelVisible() == true)
+               {
+                  UE_LOG(LogClass, Log, TEXT("load_finish %s"), *nm.ToString());
+                  stream_obj->finish_first_stream.Remove(nm);//로드와 비지블 까지 완료 됬으므로 스트리밍 로드 체크목록에서 제외 시킵니다.
+                  
+               }
+            }
+
+
+         }
+         
+         
+      }
+      UE_LOG(LogClass, Log, TEXT("load_all_fin"));
+      
+      is_fin++;
+      shutdown();
+      
+      
+   return 0;
+}
+void thread::Stop()
+{
+   //스레드 잠자는 기능 필요하면 씀
+   
+}
+void thread::shutdown()//스레드 제거 함수
+{
+   
+   EnsureCompletion();
+   delete this;
+
+}
+void thread::EnsureCompletion()//락커 뮤텍스
+{
+   Stop();
+   Thread->WaitForCompletion();
+}
+
+thread* th;
+
+//thread class
+
+
+
+class arch_list
+{
+public:
+
+   arch_list(int32 start_X, int32 end_X, int32 start_Y, int32 end_Y, FString Name);
+
+   int32 set_end_X(int32 input_this);
+   int32 set_start_X(int32 input_this);
+   int32 set_end_Y(int32 input_this);
+   int32 set_start_Y(int32 input_this);
+   FString set_name(FString str);
+
+   int32 get_end_X();
+   int32 get_start_X();
+   int32 get_end_Y();
+   int32 get_start_Y();
+   FString get_name();
+
+
+private:
+   FString name;
+   int32 start_X;
+   int32 end_X;
+   int32 start_Y;
+   int32 end_Y;
+};
+arch_list::arch_list(int32 start_x, int32 end_x, int32 start_y, int32 end_y, FString Name)
+{
+   set_start_X(start_x);
+   set_end_X(end_x);
+   set_start_Y(start_y);
+   set_end_Y(end_y);
+   set_name(Name);
+}
+
+FString arch_list::set_name(FString str)
+{
+   name = str;
+   return name;
+}
+int32 arch_list::set_end_X(int32 input_this)
+{
+   end_X = input_this;
+   return end_X;
+}
+int32 arch_list::set_start_X(int32 input_this)
+{
+   start_X = input_this;
+   return start_X;
+}
+int32 arch_list::set_end_Y(int32 input_this)
+{
+   end_Y = input_this;
+   return end_Y;
+}
+int32 arch_list::set_start_Y(int32 input_this)
+{
+   start_Y = input_this;
+   return start_Y;
+}
+
+//set
+FString arch_list::get_name()
+{
+
+   return name;
+}
+int32 arch_list::get_end_X()
+{
+
+   return end_X;
+}
+int32 arch_list::get_start_X()
+{
+
+   return start_X;
+}
+int32 arch_list::get_end_Y()
+{
+
+   return end_Y;
+}
+int32 arch_list::get_start_Y()
+{
+
+   return start_Y;
+}
+
+
+
+TArray<arch_list*> arch_data;
+
+//건물 로드 class
+
+
+TArray<FString> Ulevel_stream::check_arch_load(TArray<int32> num_stack_x, TArray<int32> num_stack_y)//순서_4 건물 레벨 로드 리스트 작성하는 함수
+{
+   //건물 로드 리스트 작성
+   TArray<FString>  st;
+
+   FString envirment_str = "environment_level"; //환경 추가
+   if (st.FindByKey(envirment_str) == nullptr)
+   {
+      st.Add(envirment_str);
+   }
+   for (int32 i = 0; i < arch_data.Num(); ++i)
+   {
+      bool is_inside_x_start = false;
+      bool is_inside_x_end = false;
+      for (int32 xx = 0; xx < num_stack_x.Num(); ++xx)
+      {
+         if ((arch_data[i]->get_start_X()) == num_stack_x[xx])
+         {
+            is_inside_x_start = true;
+         }
+         if (arch_data[i]->get_end_X() == num_stack_x[xx])
+         {
+            is_inside_x_end = true;
+         }
+      }
+
+
+      bool is_inside_y_start = false;
+      bool is_inside_y_end = false;
+      for (int32 yy = 0; yy < num_stack_y.Num(); ++yy)
+      {
+         if (arch_data[i]->get_start_Y() == num_stack_y[yy])
+         {
+            is_inside_y_start = true;
+         }
+         if (arch_data[i]->get_end_Y() == num_stack_y[yy])
+         {
+            is_inside_y_end = true;
+         }
+      }
+      if (is_inside_x_start == true && is_inside_x_end == true && is_inside_y_start == true && is_inside_x_end == true)
+      {
+         if (st.FindByKey(arch_data[i]->get_name()) == nullptr)
+         {
+            st.Add(arch_data[i]->get_name());
+         }
+      }
+
+   }
+   
+
+
+   //UE_LOG(LogClass, Log, TEXT("level %s"), *level_list[i].ToString());
+   return st;
+}
+
+
+bool Ulevel_stream::streaming(FVector char_vector, Ulevel_stream *c, UWorld* world)//순서_3
+{
+   /*레벨스트리밍계산식*/
+   TArray<FName> mem_list;//레벨을 저장하는 공간 리스트로 로드 목록을 순서대로 쌓는다.
+   TArray<int32> index_stack_x;//x좌표를 저장하는 변수이다(건물 레벨을 로드하기 위해서 저장합니다.)
+   TArray<int32> index_stack_y;//y좌표를 저장하는 변수이다(건물 레벨을 로드하기 위해서 저장합니다.)
+   bool first_gmp = false;//첫 로드 인지 확인합니다.
+   if (delete_list.Num() < 0)
+   {
+      first_gmp = true;
+   }
+   else
+   {
+      UE_LOG(LogClass, Log, TEXT("delete"));
+      mem_list = level_list;
+   }
+
+   level_list.Empty();
+ 	/*거리를 기준으로 스트리밍할 거리를 저장한 변수의 초기 설정입니다..*/
+   float origin_stream_distance = 2 * 75600;
+   float stream_distance = origin_stream_distance / 75600;//0.5 
+
+
+	/*최대 최소 x y 값을 구합니다.*/
+   float stream_x = char_vector.X / 75600;//75610
+   float stream_y = char_vector.Y / -75600;
+
+   float min_stream_x = stream_x - stream_distance;
+
+   float max_stream_x = stream_x + stream_distance;
+
+   float min_stream_y = stream_y - stream_distance;
+
+   float max_stream_y = stream_y + stream_distance;
+
+
+/*스트리밍레벨이 x축,y 축으론 0 ~ 20 블럭까지 있습니다. (최대 최소를 인식 하는 부분입니다.)*/
+   if (min_stream_x < 0)
+   {
+      min_stream_x = 0;
+   }
+   if (max_stream_x > 20)
+   {
+      max_stream_x = 20;
+   }
+
+   if (min_stream_y < 0)
+   {
+      min_stream_y = 0;
+   }
+   if (max_stream_y > 20)
+   {
+      max_stream_y = 20;
+   }
+
+   min_stream_x = round(min_stream_x);//반올림을 하여 좌표를 구합니다. x 최소
+   max_stream_x = round(max_stream_x);//반올림을 하여 좌표를 구합니다.	x 최대
+
+   min_stream_y = round(min_stream_y);//반올림을 하여 좌표를 구합니다. y 최소
+   max_stream_y = round(max_stream_y);//반올림을 하여 좌표를 구합니다. y 최대
+   float normalize_stream_distance = stream_distance;//정규화할 스트리밍 거리함수를 저장합니다.
+
+
+	/*구한 좌표들을 루프 시킵니다.*/
+   for (float x = min_stream_x; x <= max_stream_x;)
+   {
+      for (float y = min_stream_y; y <= max_stream_y;)
+      {
+         bool isitrepeat = false;
+         if ((pow((x - stream_x), 2) + pow((y - stream_y), 2)) <= pow(normalize_stream_distance, 2))//원의 방정식을 사용하여 원안에 들어오는 레벨들은 모두 로드 대기열 스택에 올립니다.
+         {
+            int32 target_x = round(x);
+            int32 target_y = round(y);
+
+            index_stack_x.Add(target_x);//건물 레벨을 로드하기 위해서 루프 인덱스들을 저장합니다.
+            index_stack_y.Add(target_y);
+		/*좌표를  문자열로 파싱하는 부분 입니다.*/
+            FString str_x;
+            if (target_x < 10)
+            {
+               str_x = "0" + FString::FromInt(target_x);
+            }
+            else
+            {
+               str_x = FString::FromInt(target_x);
+            }
+
+            FString str_y;
+            if (target_y < 10)
+            {
+               str_y = "0" + FString::FromInt(target_y);
+            }
+            else
+            {
+               str_y = FString::FromInt(target_y);
+            }
+		/*일반 지형 레벨 스트리밍을 레벨 로드 대기열 리스트에 추가합니다. */
+            FString  str = "base_x" + str_x + "_y" + str_y + "";
+            FName LevelToLoad = FName(*str);
+            level_list.Add(LevelToLoad);
+
+		/*바다 지형 레벨 스트리밍을 레벨 로드 대기열 리스트에 추가합니다. */
+            FString  str_water = "water_x" + str_x + "_y" + str_y + "";
+            FName LevelToLoad_water = FName(*str_water);
+            level_list.Add(LevelToLoad_water);
+
+            if (first_gmp == false)//첫번째 로드가 아닐시 작동.
+            {
+
+               if (mem_list.FindByKey(LevelToLoad) != nullptr)//mem_list
+               {
+                  mem_list.Remove(LevelToLoad);//이미 로드가 되있는지 확인하는 기능
+
+
+               }
+
+               if (mem_list.FindByKey(LevelToLoad_water) != nullptr)
+               {
+                  mem_list.Remove(LevelToLoad_water);//이미 로드가 되있는지 확인하는 기능(바다 레벨)
+
+
+               }
+
+            }
+
+         }
+
+
+
+         y++;
+      }
+      x++;
+   }
+   TArray<FString> arch_stack = check_arch_load(index_stack_x, index_stack_y);//건물 레벨 스트리밍 로드 리스트들을 얻어 옵니다.
+   for (int32 i = 0; i < arch_stack.Num(); i++)
+   {
+      FName arch_name = FName(*arch_stack[i]);
+      UE_LOG(LogClass, Log, TEXT("arch %d"), i);
+      level_list.Add(arch_name);//레벨 로드 리스트에 추가합니다.
+      if (first_gmp == false)//첫 로드가 아닐시 작동.
+      {
+
+         if (mem_list.FindByKey(arch_name) != nullptr)
+         {
+            mem_list.Remove(arch_name);//건물 레벨이 로드 되있는지 확인하는 기능
+
+
+         }
+
+      }
+   }
+   delete_list = mem_list;
+
+   return false;
+}
+
+// Sets default values for this component's properties
+Ulevel_stream::Ulevel_stream(): is_locker(false) // 순서_1
+{
+   
+   // Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
+   // off to improve performance if you don't need them.
+   UE_LOG(LogClass, Log, TEXT("create level_stream"));
+   now_render_list.Empty();//로드 리스트 비우기.
+   arch_data.Add(new arch_list(3, 4, 9, 9, "start_factory"));// 건물레벨로드 리스트 추가 로드 가능 좌표가 (x = 3 ~ 9 , y = 4 ~ 9)안의 값이면   start_factory 레벨 로드 
+   
+   
+   begin_open_fin = false;//레벨이 모두 로드 됬는지 확인하는 변수.
+   
+   finish_first_stream.Empty();//맨처음 레벨 로드시 리스트 비우기.
+
+   PrimaryComponentTick.bCanEverTick = true;
+
+   // ...
+}
+
+
+TArray<FName> Ulevel_stream::delete_this()//이 컴포넌트 제거 하는 함수
+{
+   
+   is_locker = true;
+   int32 index = now_render_list.Num();
+
+   arch_data.Empty();
+   level_list.Empty();
+   begin_open_fin = false;
+   finish_first_stream.Empty();
+
+   FLatentActionInfo delete_info;
+   delete_info.CallbackTarget = this;
+
+   
+
+   
+
+   this->DestroyComponent();
+
+   return now_render_list;
+
+   
+}
+// Called when the game starts
+void Ulevel_stream::BeginPlay()//최초 로딩시 레벨스트리밍! 순서_2
+{
+   Super::BeginPlay();
+   UE_LOG(LogClass, Log, TEXT("start stream"));
+   UWorld* world = GetWorld();
+   ACharacter* MyCharacter = UGameplayStatics::GetPlayerCharacter(this, 0);
+   FVector char_vector = MyCharacter->GetActorLocation();//플레이어 위치 정보.
+   streaming(char_vector, this, world);//스트리밍 계산하는 함수 호출.
+   FLatentActionInfo info;
+   info.CallbackTarget = this;
+
+   int32 num_of_arr = level_list.Num();
+	/*레벨 로드 리스트를 로드하는 부분 입니다.*/
+   for (int32 i = 0; i < num_of_arr; i++)
+   {
+      info.UUID = i;
+      ULevelStreaming* base_stream_chk;
+      if (
+         (
+         (base_stream_chk = UGameplayStatics::GetStreamingLevel(this, level_list[i])) != NULL
+            )
+         )
+      {
+         if (base_stream_chk->IsLevelLoaded() == false)
+         {
+            UGameplayStatics::LoadStreamLevel(this, level_list[i], true, false, info);
+            if(now_render_list.Find(level_list[i]) == INDEX_NONE)
+               now_render_list.Add(level_list[i]);
+            delete_id_list.Add(i);
+
+
+         }
+      }
+
+   }
+
+
+   for (int32 i = 0; i < num_of_arr; i++)
+   {
+      ULevelStreaming* base_stream_chk;
+      if (
+         (
+         (base_stream_chk = UGameplayStatics::GetStreamingLevel(this, level_list[i])) != NULL
+            )
+         )
+      {
+         if (base_stream_chk->IsLevelLoaded() == false)
+         {
+            finish_first_stream.Add(level_list[i]); //첫번째 로드시만 레벨 스트리밍 로드가 완료 됬는지 확인할때 쓰는 확인용 TArray변수입니다.
+         }
+
+
+
+      }
+   }
+   
+   
+   
+   th = new thread(this, finish_first_stream);//스레드 클래스를 생성 하여 첫번째 로드시만 레벨 스트리밍 로드가 완료 됬는지 확인 합니다.
+   
+   is_first_fin();
+   
+   // ...
+
+}
+bool Ulevel_stream::is_first_fin()//레벨 로드가 끝났는지 확인하는 함수 (블루프린트에서 접근 가능.)
+{
+   
+      if (th->IsFinished() == true)
+      {
+         begin_open_fin = true;
+      }
+      else
+      {
+         begin_open_fin = false;
+      }
+   
+      return begin_open_fin;
+   
+}
+// Called every frame
+void Ulevel_stream::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)//틱마다 레벨 로드 업데이트를 확인합니다. 
+{
+   Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+   
+   
+   is_first_fin();
+   UWorld* world = GetWorld();
+
+   ACharacter* MyCharacter = UGameplayStatics::GetPlayerCharacter(this, 0);
+   FVector char_vector = MyCharacter->GetActorLocation();
+   streaming(char_vector, this, world);
+
+   FLatentActionInfo info;
+   info.CallbackTarget = this;
+
+
+
+   for (int32 i = 0; i < level_list.Num(); i++)
+   {
+      info.UUID = i;
+      ULevelStreaming* base_stream_chk;
+      if (
+         (
+         (base_stream_chk = UGameplayStatics::GetStreamingLevel(this, level_list[i])) != NULL
+            )
+         )
+      {
+         if (base_stream_chk->IsLevelLoaded() == false)
+         {
+            if(is_locker == false)//delete 할때 다음 루프 방지
+               UGameplayStatics::LoadStreamLevel(this, level_list[i], true, false, info);
+
+            if (now_render_list.Find(level_list[i]) == INDEX_NONE)//중복 방지
+               now_render_list.Add(level_list[i]);
+
+         
+            delete_id_list.Add(i);
+         }
+      }
+
+   }
+   FLatentActionInfo delete_info;
+   delete_info.CallbackTarget = this;
+   for (int32 i = 0; i < delete_list.Num(); i++)
+   {
+      FName now_delete = delete_list[i];
+
+      UGameplayStatics::UnloadStreamLevel(this, now_delete, delete_info);
+      now_render_list.Remove(now_delete);
+      delete_list.Remove(now_delete);
+   }
+
+   
+}
+

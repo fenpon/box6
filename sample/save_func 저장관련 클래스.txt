@@ -1,0 +1,104 @@
+#include "save_func.h"
+#include "Paths.h"
+#include "PlatformFile.h"
+#include "PlatformFilemanager.h"
+
+
+
+
+class Fvisitor : public IPlatformFile::FDirectoryVisitor//세이브 리스트 찾는 애
+{
+public:
+	Fvisitor() {}
+
+	virtual bool Visit(const TCHAR* FilenameOrDirectory, bool bIsDirectory)
+	{
+		if (!bIsDirectory)
+		{
+			FString FullFilePath(FilenameOrDirectory);
+			if (FPaths::GetExtension(FullFilePath) == TEXT("sav"))
+			{
+				FString CleanFilename = FPaths::GetBaseFilename(FullFilePath);
+				CleanFilename = CleanFilename.Replace(TEXT(".sav"), TEXT(""));
+				SavesFound.Add(CleanFilename);
+			}
+		}
+		return true;
+	}
+	TArray<FString> SavesFound;
+};
+/*현재 플레이하는 세이브데이터 저장 클래스*/
+
+
+
+USaveGame* Usave_func::Set_SaveData(USaveGame* sv)//현재 게임데이터 저장
+{
+	
+	return	save_now_game_data.set_sv_mem(sv);
+};
+USaveGame* Usave_func::Get_SaveData()//현재 게임데이터 얻기
+{
+	return	save_now_game_data.get_sv_mem();
+};
+
+///////////////////////////////
+
+TArray<USaveGame*> Usave_func :: Get_SaveList()//세이브 번호 리스트 불러오기
+{
+	
+
+
+	TArray<FString> Saves;
+	const FString SavesFolder = FPaths::GameSavedDir() + TEXT("SaveGames");
+
+	if (!SavesFolder.IsEmpty())
+	{
+		Fvisitor Visitor;
+		FPlatformFileManager::Get().GetPlatformFile().IterateDirectory(*SavesFolder, Visitor);
+		Saves = Visitor.SavesFound;
+		
+	}
+	int32 user_ind = -1;
+
+	TArray<USaveGame*> sv_list;
+
+	for (int32 i = 0; i < Saves.Num(); ++i)
+	{
+		UE_LOG(LogClass, Log, TEXT("save : %s"), *Saves[i]);
+		
+		FString sv = Saves[i];
+		if (sv == TEXT("continue_save"))
+		{
+			user_ind = 1;
+		}
+		else
+		{
+			sv.RemoveAt(0, 5);
+			user_ind = FCString::Atoi(*sv);
+			USaveGame* Load_save;
+			Load_save = UGameplayStatics::CreateSaveGameObject(USaveGame::StaticClass());
+			FString SaveSlotName = Saves[i];
+			int32 UserIndex = user_ind;
+			if (
+				(
+				(Load_save = UGameplayStatics::LoadGameFromSlot(SaveSlotName, UserIndex)) != NULL
+					)
+				)
+			{//로드 리스트가 있음
+				sv_list.Add(Load_save);
+			}
+			else
+			{
+				/*
+				TArray<int32> null_arr;
+				null_arr.Init(NULL, 1);
+				return null_arr;
+				*/
+			}
+		}
+		
+	}
+	return sv_list;
+
+	
+};
